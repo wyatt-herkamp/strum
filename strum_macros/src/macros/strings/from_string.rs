@@ -165,7 +165,6 @@ pub fn from_string_inner(ast: &DeriveInput) -> syn::Result<TokenStream> {
         #try_from_string
     })
 }
-
 #[rustversion::before(1.34)]
 fn try_from_str(
     _name: &proc_macro2::Ident,
@@ -176,7 +175,6 @@ fn try_from_str(
 ) -> TokenStream {
     Default::default()
 }
-
 #[rustversion::since(1.34)]
 fn try_from_str(
     name: &proc_macro2::Ident,
@@ -209,7 +207,6 @@ fn try_from_string(
 ) -> TokenStream {
     Default::default()
 }
-
 #[rustversion::since(1.34)]
 fn try_from_string(
     name: &proc_macro2::Ident,
@@ -221,7 +218,33 @@ fn try_from_string(
     standard_match_arms: &[TokenStream],
     default: Option<&TokenStream>,
 ) -> TokenStream {
+    // Takes the match body and the phf body and returns
+    let body = |standard_match_body: &TokenStream, phf_body: &TokenStream| {
+            quote! {
+                #[cfg(std)]
+                #[allow(clippy::use_self)]
+                impl #impl_generics ::core::convert::TryFrom<String> for #name #ty_generics #where_clause {
+                 type Error = #strum_module_path::ParseError;
+                    fn try_from(s: String) -> ::core::result::Result< #name #ty_generics , <Self as ::core::convert::TryFrom<String>>::Error> {
+                        #phf_body
+                        #standard_match_body
+                }
+            }
+        }
+    };
+    // If it has a default build the match body and phf body
+    // Else just pass to FromStr
     if let Some(default) = default {
+        let standard_match_body = if standard_match_arms.is_empty() {
+            return body(default, &quote!());
+        } else {
+            quote! {
+                ::core::result::Result::Ok(match s.as_str() {
+                    #(#standard_match_arms)*
+                    _ => return #default,
+                })
+            }
+        };
         let phf_body = if phf_exact_match_arms.is_empty() {
             quote!()
         } else {
@@ -235,29 +258,13 @@ fn try_from_string(
                 }
             }
         };
-        quote! {
-        #[allow(clippy::use_self)]
-        impl #impl_generics ::core::convert::TryFrom<String> for #name #ty_generics #where_clause {
-            type Error = #strum_module_path::ParseError;
-            fn try_from(s: String) -> ::core::result::Result< #name #ty_generics , <Self as ::core::convert::TryFrom<String>>::Error> {
-                #phf_body
-                ::core::result::Result::Ok(match s.as_str() {
-                    #(#standard_match_arms)*
-                    _ => return #default,
-                })
-            }
-        }
-        }
+        body(&standard_match_body, &phf_body)
     } else {
-        quote! {
-            #[inline(always)]
-            #[allow(clippy::use_self)]
-            impl #impl_generics ::core::convert::TryFrom<String> for #name #ty_generics #where_clause {
-                type Error = #strum_module_path::ParseError;
-                fn try_from(s: String) -> ::core::result::Result< #name #ty_generics , <Self as ::core::convert::TryFrom<String>>::Error> {
-                    ::core::str::FromStr::from_str(s.as_str())
-                }
-            }
-        }
+        body(
+            &quote! {
+                ::core::str::FromStr::from_str(s.as_str())
+            },
+            &quote!(),
+        )
     }
 }
